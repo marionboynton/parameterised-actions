@@ -2,6 +2,7 @@
 Reinforcement Learning for Parameterised Action Spaces
 
 The Platform Environment: https://github.com/cycraig/gym-platform
+
 The platform environment tests agents in a parameterised action space - discrete actions with continuous parameters. At each step the agent selects the discrete action to take (run, leap, hop) as well as the parameters to use with that action (distance to cover).
 
 This Repository includes an implementation of the Parameterized Deep Q network (PDQN) to learn in this domain as well as Hybrid Proximal Policy Optimization model as described in [this paper](https://arxiv.org/pdf/1903.01344.pdf), which maintains 2 policy actors - one for the continuous actions and one forthe discrete actions - and a single critic network that approximates the state values.
