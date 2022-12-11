@@ -12,6 +12,12 @@ This Repository includes an implementation of the Parameterized Deep Q network (
 - gym 0.10.5
 - pygame 1.9.4
 - numpy
+- gym-platform 0.0.1
+
+
+### example usage
+`python train_and_test_hppo.py`
+
 
 ### References:
 - Reinforcement Learning with Parameterized Actions: https://arxiv.org/pdf/1509.01644.pdf
