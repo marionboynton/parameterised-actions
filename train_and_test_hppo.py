@@ -10,7 +10,7 @@ from agents.hybrid_ppo import HPPO
 
 
 # folder to save results
-test_num = 21
+test_num = 1
 results_path = f"hppo_results/{test_num}"
 os.makedirs(results_path, exist_ok=True)
 
@@ -221,8 +221,8 @@ def test(env, agent, deterministic=True):
         # go to next state
         state = np.array(reduce_state(next_state), dtype=np.float32, copy=False)
 
-        env.render()
-        time.sleep(0.002)
+        ##env.render()
+        #time.sleep(0.002)
         
         if terminal:
             break

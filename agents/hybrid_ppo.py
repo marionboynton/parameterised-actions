@@ -210,8 +210,8 @@ class HPPO(nn.Module):
                  lr_critic = 0.0002,
                  loss_func=torch.nn.MSELoss(), #F.mse_loss, # F.mse_loss
                  vf_coef = 0.5,
-                 ent_coef_discrete = 0.01, # 0 for no entropy regularization
-                 ent_coef_cont = 0.01,
+                 ent_coef_discrete = 0.05,
+                 ent_coef_cont = 0.05,
                  seed=None):
         super(HPPO, self).__init__()
         
