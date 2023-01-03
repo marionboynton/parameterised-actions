@@ -3,11 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
-#import random
-from collections import Counter
-
-from torch.distributions import Categorical, Normal, MultivariateNormal
-import math
+from torch.distributions import Categorical, MultivariateNormal
 from scipy import stats
 
 device = torch.device('cpu')
@@ -82,13 +78,12 @@ class ActorDiscrete(nn.Module):
 
 class ActorContinuous(nn.Module):
 
-    def __init__(self, state_dim, action_dim, action_std_init, hidden_layers=[64, 32, 32], activation="tanh", output_layer_init_std=0.2):
+    def __init__(self, state_dim, action_dim, action_std_init, hidden_layers=[64, 32, 32], output_layer_init_std=0.2):
         super(ActorContinuous, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim # 3
 
         self.action_variance = torch.full((action_dim,), action_std_init * action_std_init).to(device)
-        self.activation = activation
 
         # create layers
         self.layers = nn.ModuleList()
@@ -103,7 +98,7 @@ class ActorContinuous(nn.Module):
 
         # initialise layer weights
         for i in range(len(self.layers) - 1):
-            nn.init.kaiming_normal_(self.layers[i].weight, nonlinearity=activation)
+            nn.init.kaiming_normal_(self.layers[i].weight, nonlinearity="tanh")
             nn.init.zeros_(self.layers[i].bias)
         if output_layer_init_std is not None:
             nn.init.normal_(self.layers[-1].weight, mean=0., std=output_layer_init_std)
@@ -118,14 +113,7 @@ class ActorContinuous(nn.Module):
         num_layers = len(self.layers)
         a = self.layers[0](state)
         for i in range(1, num_layers):
-            if self.activation == "relu":
-                a = self.layers[i](F.relu(a))
-            elif self.activation == "leaky_relu":
-                a = self.layers[i](F.leaky_relu(a), negative_slope)
-            elif self.activation == "tanh":
-                a = self.layers[i](torch.tanh(a))
-            else:
-                raise ValueError("Unknown activation function "+str(self.activation))
+            a = self.layers[i](torch.tanh(a))
         return a
 
     def set_action_std(self, new_action_std):
@@ -204,7 +192,7 @@ class HPPO(nn.Module):
                  action_std_init, # starting std for action distribution
                  eps_clip=0.2,
                  num_epochs=50, # run policy for k epochs on stored transitions and optimize
-                 discount_factor=1, # trying disocunt factor = 1 so the agent prioritises th
+                 discount_factor=0.9999, # trying disocunt factor = 1 so the agent prioritises th
                  lr_discrete=0.0005,
                  lr_continuous=0.0001,
                  lr_critic = 0.0002,
@@ -222,7 +210,6 @@ class HPPO(nn.Module):
         self.parameter_sizes = [ele.shape[0] for ele in list(action_space.spaces[1].spaces)]
         self.action_parameter_size = sum(self.parameter_sizes)
 
-        #print([action_space.spaces[1].spaces[i].high for i in range(self.num_discrete_actions)])
         self.action_parameter_max_numpy = np.concatenate([action_space.spaces[1].spaces[i].high for i in range(self.num_discrete_actions)]).ravel()
         self.action_parameter_min_numpy = np.concatenate([action_space.spaces[1].spaces[i].low for i in range(self.num_discrete_actions)]).ravel()
         self.action_parameter_range_numpy = (self.action_parameter_max_numpy - self.action_parameter_min_numpy)
@@ -258,16 +245,14 @@ class HPPO(nn.Module):
         self.discrete_policy = ActorDiscrete(self.state_size, self.num_discrete_actions).to(device)
         self.old_discrete_policy = ActorDiscrete(self.state_size, self.num_discrete_actions).to(device)
         self.old_discrete_policy.load_state_dict(self.discrete_policy.state_dict())
-        self.discrete_optimizer = optim.Adam([{'params': self.discrete_policy.parameters(), 'lr': self.lr_discrete}, {'params': self.critic.parameters(), 'lr': self.lr_critic}]) #, betas=(0.95, 0.999))
-        self.discrete_policy_losses = []
-
 
         self.cont_policy = ActorContinuous(self.state_size, self.cont_action_dim, self.action_std).to(device)
         self.old_cont_policy = ActorContinuous(self.state_size, self.num_discrete_actions, self.action_std).to(device)
         self.old_cont_policy.load_state_dict(self.cont_policy.state_dict())
-        self.cont_optimizer = optim.Adam([{'params': self.cont_policy.parameters(), 'lr': self.lr_continuous}, {'params': self.critic.parameters(), 'lr': self.lr_critic}]) #, betas=(0.95, 0.999))
-        self.cont_policy_losses = []
         self.action_std = action_std_init
+
+        self.optimizer = optim.Adam([{'params': self.discrete_policy.parameters(), 'lr': self.lr_discrete}, {'params': self.cont_policy.parameters(), 'lr': self.lr_continuous}, {'params': self.critic.parameters(), 'lr': self.lr_critic}]) #, betas=(0.95, 0.999))
+        self.critic_losses = []
 
         self.loss_func = loss_func
 
@@ -285,6 +270,17 @@ class HPPO(nn.Module):
             print(f"setting actor output action std to {self.action_std}")
         self.set_action_std(self.action_std)
 
+
+    def decay_entropy_coeff(self, decay_rate, min_coeff, coefficient=None):
+        if not coefficient:
+            self.ent_coef_discrete = self.ent_coef_discrete - decay_rate
+            self.ent_coef_cont = self.ent_coef_cont - decay_rate
+            self.ent_coef_discrete = max(min_coeff, round(self.ent_coef_discrete, 4))
+            self.ent_coef_cont = max(min_coeff, round(self.ent_coef_cont, 4))
+
+        else:
+            coefficient = coefficient - decay_rate
+            coefficient = max(min_coeff, round(self.coefficient, 4))
 
     def start_episode(self):
         pass
@@ -329,7 +325,6 @@ class HPPO(nn.Module):
             cont_action = self.old_cont_policy.get_action(state, deterministic=True)
             
         return cont_action.detach()
-
             
     def update_network(self):
         # Monte Carlo estimate of returns
@@ -357,11 +352,11 @@ class HPPO(nn.Module):
 
         discrete_losses = []
         cont_losses = []
+        critic_losses = []
 
         # optimize policy for num epochs
         for _ in range(self.num_epochs):
             # DISCRETE POLICY
-
             # Evaluating old actions and values
             discrete_logprobs, discrete_dist_entropy = self.discrete_policy.evaluate(old_states, old_discrete_actions)
             state_values = self.critic.forward(old_states) # [50, 1]
@@ -378,29 +373,27 @@ class HPPO(nn.Module):
             surr = discrete_ratios * advantages
             surr_clipped = torch.clamp(discrete_ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
             # final loss of clipped objective PPO
-            discrete_loss = -torch.min(surr, surr_clipped) + self.vf_coef*(self.loss_func(state_values, returns)) - self.ent_coef_discrete*discrete_dist_entropy
+            discrete_loss = torch.min(surr, surr_clipped) + self.ent_coef_discrete*discrete_dist_entropy
             discrete_losses.append(discrete_loss.mean().item())
-            
-            self.discrete_optimizer.zero_grad()
-            discrete_loss.mean().backward(retain_graph=True)
-            self.discrete_optimizer.step()
 
             # CONTINUOUS POLICY
-
-            state_values = self.critic.forward(old_states) # [50, 1]
-            state_values = torch.squeeze(state_values) # [50]
             cont_logprobs, cont_dist_entropy = self.cont_policy.evaluate(old_states, old_cont_actions)
             cont_ratios = torch.exp(cont_logprobs - old_cont_logprobs.detach())
-            advantages = returns - state_values.detach()
-
             surr = cont_ratios * advantages
             surr_clipped = torch.clamp(cont_ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
-            cont_loss = -torch.min(surr, surr_clipped) + self.vf_coef*(self.loss_func(state_values, returns)) - self.ent_coef_cont*cont_dist_entropy
+            cont_loss = torch.min(surr, surr_clipped) + self.ent_coef_cont*cont_dist_entropy
             cont_losses.append(cont_loss.mean().item())
 
-            self.cont_optimizer.zero_grad()
-            cont_loss.mean().backward()
-            self.cont_optimizer.step()    
+            # CRITIC
+            critic_loss = self.vf_coef*(self.loss_func(state_values, returns))
+            critic_losses.append(critic_loss.mean().item())
+
+            total_loss = - discrete_loss - cont_loss + critic_loss
+
+            # gradient ascent / descent
+            self.optimizer.zero_grad()
+            total_loss.mean().backward()
+            self.optimizer.step()
             
         # Copy new weights into old policy
         self.old_discrete_policy.load_state_dict(self.discrete_policy.state_dict())
@@ -409,7 +402,7 @@ class HPPO(nn.Module):
         # clear buffer
         self.buffer.clear()
 
-        return stats.sem(discrete_losses), np.mean(discrete_losses), stats.sem(cont_losses), np.mean(cont_losses)
+        return stats.sem(discrete_losses), np.mean(discrete_losses), stats.sem(cont_losses), np.mean(cont_losses), stats.sem(critic_losses), np.mean(critic_losses)
 
         
     def save_models(self, dir):
